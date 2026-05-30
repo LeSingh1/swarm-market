@@ -14,6 +14,7 @@
     "build:mcp": "tsc --project tsconfig.backend.json --outDir dist/mcp mcp/server.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.100.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

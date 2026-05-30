@@ -1,36 +1,30 @@
-import type { SkillPack, RateRequest, SearchResult } from '../types/contract'
+// Frontend API client (Person B). One function per route.
+import { API } from "../types/contract";
+import type {
+  AgentRun, RunRequest, ReflectResponse, Episode,
+  SearchResponse, InstallResponse, RateResponse, PublishResponse, SkillPack,
+} from "../types/contract";
 
-const BASE = import.meta.env.VITE_API_BASE_URL ?? '/api'
-
-async function json<T>(res: Response): Promise<T> {
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-  return res.json() as Promise<T>
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const r = await fetch(`${API.base}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`${path} ${r.status}`);
+  return r.json();
 }
 
-export async function search(q?: string): Promise<SearchResult> {
-  const url = `${BASE}/market/search${q ? `?q=${encodeURIComponent(q)}` : ''}`
-  return json<SearchResult>(await fetch(url))
-}
+export const runAgent  = (b: RunRequest) => post<AgentRun>(API.run, b);
+export const reflect   = (agent_id: string, episodes: Episode[]) =>
+  post<ReflectResponse>(API.reflect, { agent_id, episodes });
+export const publish   = (pack: SkillPack) => post<PublishResponse>(API.publish, { pack });
+export const install   = (agent_id: string, pack_id: string) =>
+  post<InstallResponse>(API.install, { agent_id, pack_id });
+export const rate      = (pack_id: string) => post<RateResponse>(API.rate, { pack_id, delta: 1 });
 
-export async function rate(req: RateRequest): Promise<SkillPack> {
-  return json<SkillPack>(
-    await fetch(`${BASE}/market/rate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req),
-    })
-  )
-}
-
-// Stubs for Person A's routes — swap in real impl when their API is live
-export async function publish(_pack: Omit<SkillPack, 'id' | 'createdAt' | 'repScore' | 'installedBy'>): Promise<SkillPack> {
-  throw new Error('publish: waiting on Person A')
-}
-
-export async function install(_packId: string, _agentId: string): Promise<SkillPack> {
-  throw new Error('install: waiting on Person A')
-}
-
-export async function runAgent(_agentId: string): Promise<{ success: boolean; output: string }> {
-  throw new Error('runAgent: waiting on Person A')
+export async function search(q = ""): Promise<SkillPack[]> {
+  const r = await fetch(`${API.base}${API.search}?q=${encodeURIComponent(q)}`);
+  if (!r.ok) throw new Error(`search ${r.status}`);
+  return ((await r.json()) as SearchResponse).packs;
 }
