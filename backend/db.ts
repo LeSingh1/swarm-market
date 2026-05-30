@@ -1,66 +1,57 @@
-// ============================================================
-// Butterbase table helpers (Person B's backend slice).
-// In-memory store now — swap each fn body for Butterbase calls once you have the API key.
-// Tables: skill_packs, agent_runs, install_events.
-//
-// Butterbase swap pattern (Supabase-compatible):
-//   import { createClient } from '@butterbase/client'
-//   const db = createClient(process.env.BUTTERBASE_URL!, process.env.BUTTERBASE_API_KEY!)
-//   upsertPack: db.from('skill_packs').upsert(p)
-//   getPack:    db.from('skill_packs').select('*').eq('id', id) → data[0]
-//   listPacks:  db.from('skill_packs').select('*') → data
-//   bumpRep:    db.from('skill_packs').update({rep_score}).eq('id',id).select → data[0]
-// ============================================================
+import { createClient } from '@supabase/supabase-js'
 import type { AgentRun, SkillPack } from "../src/types/contract"
 
-const packs = new Map<string, SkillPack>([
-  ["sp_demo1", {
-    id: "sp_demo1",
-    name: "Fintech objection: lead with compliance",
-    lesson: "When a fintech prospect objects on price, pivot to compliance risk reduction first, then TCO.",
-    trigger: "price objection from fintech prospect",
-    domain: "sdr-outreach",
-    rep_score: 12,
-    provenance: { created_by: "agent_publisher", episode_count: 3 },
-    created_at: new Date().toISOString(),
-  }],
-  ["sp_demo2", {
-    id: "sp_demo2",
-    name: "Cold open: mutual connection hook",
-    lesson: "Open cold emails by naming a mutual connection or shared context before any pitch.",
-    trigger: "cold outreach with no prior relationship",
-    domain: "sdr-outreach",
-    rep_score: 8,
-    provenance: { created_by: "agent_publisher", episode_count: 2 },
-    created_at: new Date().toISOString(),
-  }],
-])
+const db = createClient(
+  process.env.SUPABASE_URL ?? 'https://zztzaxmtwyrdkaarhkvz.supabase.co',
+  process.env.SUPABASE_KEY ?? 'sb_publishable_QSUNFhocvqpWCMWJh8PmNw_RnCLICiE'
+)
+
+const TABLE = 'skill_packs'
+
+// Supabase stores "trigger" (reserved SQL word) as "trigger_condition" — map on read/write
+function toRow(p: SkillPack) {
+  const { trigger, ...rest } = p
+  return { ...rest, trigger_condition: trigger }
+}
+
+function fromRow(row: Record<string, unknown>): SkillPack {
+  const { trigger_condition, ...rest } = row
+  return { ...rest, trigger: trigger_condition } as SkillPack
+}
 
 export async function upsertPack(p: SkillPack): Promise<void> {
-  packs.set(p.id, p)
+  const { error } = await db.from(TABLE).upsert(toRow(p))
+  if (error) throw new Error(error.message)
 }
 
 export async function getPack(id: string): Promise<SkillPack> {
-  const p = packs.get(id)
-  if (!p) throw new Error(`pack ${id} not found`)
-  return p
+  const { data, error } = await db.from(TABLE).select('*').eq('id', id).single()
+  if (error || !data) throw new Error(`pack ${id} not found`)
+  return fromRow(data)
 }
 
 export async function listPacks(): Promise<SkillPack[]> {
-  return [...packs.values()]
+  const { data, error } = await db.from(TABLE).select('*').order('rep_score', { ascending: false })
+  if (error) throw new Error(error.message)
+  return (data ?? []).map(fromRow)
 }
 
 export async function bumpRep(id: string, delta: number): Promise<SkillPack> {
-  const p = await getPack(id)
-  const updated: SkillPack = { ...p, rep_score: p.rep_score + delta }
-  packs.set(id, updated)
-  return updated
+  const current = await getPack(id)
+  const { data, error } = await db
+    .from(TABLE)
+    .update({ rep_score: current.rep_score + delta })
+    .eq('id', id)
+    .select('*')
+    .single()
+  if (error || !data) throw new Error(`pack ${id} not found`)
+  return fromRow(data)
 }
 
 export async function logRun(_run: AgentRun): Promise<void> {
-  // TODO: insert into agent_runs table when Butterbase is wired
+  // agent_runs table — add when Person A wires it
 }
 
 export async function logInstall(_packId: string, _agentId: string): Promise<void> {
-  // TODO: insert into install_events table when Butterbase is wired
+  // install_events table — add when Person A wires it
 }
