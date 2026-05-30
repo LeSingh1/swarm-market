@@ -1,42 +1,39 @@
 // ============================================================
 // Pack registry + run/install logs.
-// Dual-path: real Butterbase when BUTTERBASE_APP_ID is set, plus an in-memory
-// Map kept as a live mirror so a Butterbase hiccup/RLS block can never break
-// the demo. Same signatures either way. Tables (schema.sql): skill_packs,
+// Dual-path: real Supabase when SUPABASE_URL + key are set, plus an in-memory
+// Map kept as a live mirror so a Supabase hiccup/RLS block can never break the
+// demo. Same signatures either way. Tables (schema.sql): skill_packs,
 // agent_runs, install_events.
+//
+// Key: prefer SUPABASE_SERVICE_KEY (bypasses RLS, server-side) and fall back to
+// SUPABASE_ANON_KEY. With the anon key, RLS must be off (or have permissive
+// policies) on the three tables or writes will be rejected.
 // ============================================================
+import { createClient, type SupabaseClient } from "@supabase/supabase-js"
 import type { AgentRun, SkillPack } from "../src/types/contract"
 
-const BB_APP_ID = process.env.BUTTERBASE_APP_ID
-const BB_API_URL = process.env.BUTTERBASE_API_URL ?? "https://api.butterbase.ai"
-const BB_ANON_KEY = process.env.BUTTERBASE_ANON_KEY
-const useBB = !!BB_APP_ID
+const SUPABASE_URL = process.env.SUPABASE_URL
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY ?? process.env.SUPABASE_ANON_KEY
+const useDB = !!(SUPABASE_URL && SUPABASE_KEY)
 
-// Lazy client (dynamic import: the SDK is ESM-only, tsx can't static-import it).
-let _bb: any = null
-async function bb(): Promise<any> {
-  if (_bb) return _bb
-  const { createClient } = await import("@butterbase/sdk")
-  _bb = createClient({ appId: BB_APP_ID!, apiUrl: BB_API_URL, anonKey: BB_ANON_KEY })
-  return _bb
-}
-function unwrap<T>(res: { data: T; error: any }, where: string): T {
-  if (res?.error) throw new Error(`${where}: ${res.error.message ?? res.error}`)
-  return res.data
+let _sb: SupabaseClient | null = null
+function sb(): SupabaseClient {
+  if (!_sb) _sb = createClient(SUPABASE_URL!, SUPABASE_KEY!, { auth: { persistSession: false } })
+  return _sb
 }
 
-let warnedBB = false
-let confirmedBB = false
-function warnBB(where: string, err: unknown) {
-  if (!warnedBB) {
-    console.warn(`[butterbase] falling back to in-memory mirror (${where}): ${(err as Error).message}`)
-    warnedBB = true
+let warnedDB = false
+let confirmedDB = false
+function warnDB(where: string, err: unknown) {
+  if (!warnedDB) {
+    console.warn(`[supabase] falling back to in-memory mirror (${where}): ${(err as Error).message}`)
+    warnedDB = true
   }
 }
-function confirmBB() {
-  if (!confirmedBB) {
-    console.log(`[butterbase] live: reads/writes hitting ${BB_API_URL} (app ${BB_APP_ID})`)
-    confirmedBB = true
+function confirmDB() {
+  if (!confirmedDB) {
+    console.log(`[supabase] live: reads/writes hitting ${SUPABASE_URL}`)
+    confirmedDB = true
   }
 }
 
@@ -66,35 +63,41 @@ const seed: SkillPack[] = [
 ]
 const packs = new Map<string, SkillPack>(seed.map(p => [p.id, p]))
 
-// Seed Butterbase once if the table is empty, so the UI still has data to show.
+// Seed Supabase once if the table is empty, so the UI still has data to show.
 let seeded = false
-async function seedBBOnce(c: any) {
+async function seedDBOnce() {
   if (seeded) return
   seeded = true
-  const existing = unwrap<any[]>(await c.from("skill_packs").select("id").limit(1), "seed check")
-  if (!existing?.length) for (const p of seed) await c.from("skill_packs").insert(toRow(p))
+  const { data, error } = await sb().from("skill_packs").select("id").limit(1)
+  if (error) throw error
+  if (!data?.length) {
+    const { error: insErr } = await sb().from("skill_packs").insert(seed.map(toRow))
+    if (insErr) throw insErr
+  }
 }
 
 // ---------------- public API (identical signatures both paths) ----------------
 export async function upsertPack(p: SkillPack): Promise<void> {
   packs.set(p.id, p) // mirror always
-  if (!useBB) return
+  if (!useDB) return
   try {
-    const c = await bb()
-    const found = unwrap<any[]>(await c.from("skill_packs").select("id").eq("id", p.id), "upsert lookup")
-    if (found?.length) unwrap(await c.from("skill_packs").update(toRow(p)).eq("id", p.id), "update")
-    else unwrap(await c.from("skill_packs").insert(toRow(p)), "insert")
-    confirmBB()
-  } catch (err) { warnBB("upsertPack", err) }
+    const { data: found, error: selErr } = await sb().from("skill_packs").select("id").eq("id", p.id)
+    if (selErr) throw selErr
+    const res = found?.length
+      ? await sb().from("skill_packs").update(toRow(p)).eq("id", p.id)
+      : await sb().from("skill_packs").insert(toRow(p))
+    if (res.error) throw res.error
+    confirmDB()
+  } catch (err) { warnDB("upsertPack", err) }
 }
 
 export async function getPack(id: string): Promise<SkillPack> {
-  if (useBB) {
+  if (useDB) {
     try {
-      const c = await bb()
-      const rows = unwrap<any[]>(await c.from("skill_packs").select("*").eq("id", id), "getPack")
-      if (rows?.length) { confirmBB(); return fromRow(rows[0]) }
-    } catch (err) { warnBB("getPack", err) }
+      const { data, error } = await sb().from("skill_packs").select("*").eq("id", id)
+      if (error) throw error
+      if (data?.length) { confirmDB(); return fromRow(data[0]) }
+    } catch (err) { warnDB("getPack", err) }
   }
   const p = packs.get(id)
   if (!p) throw new Error(`pack ${id} not found`)
@@ -102,14 +105,14 @@ export async function getPack(id: string): Promise<SkillPack> {
 }
 
 export async function listPacks(): Promise<SkillPack[]> {
-  if (useBB) {
+  if (useDB) {
     try {
-      const c = await bb()
-      await seedBBOnce(c)
-      const rows = unwrap<any[]>(await c.from("skill_packs").select("*"), "listPacks")
-      confirmBB()
-      return (rows ?? []).map(fromRow)
-    } catch (err) { warnBB("listPacks", err) }
+      await seedDBOnce()
+      const { data, error } = await sb().from("skill_packs").select("*")
+      if (error) throw error
+      confirmDB()
+      return (data ?? []).map(fromRow)
+    } catch (err) { warnDB("listPacks", err) }
   }
   return [...packs.values()]
 }
@@ -118,29 +121,29 @@ export async function bumpRep(id: string, delta: number): Promise<SkillPack> {
   const current = await getPack(id)
   const updated: SkillPack = { ...current, rep_score: current.rep_score + delta }
   packs.set(id, updated) // mirror always
-  if (useBB) {
+  if (useDB) {
     try {
-      const c = await bb()
-      unwrap(await c.from("skill_packs").update({ rep_score: updated.rep_score }).eq("id", id), "bumpRep")
-      confirmBB()
-    } catch (err) { warnBB("bumpRep", err) }
+      const { error } = await sb().from("skill_packs").update({ rep_score: updated.rep_score }).eq("id", id)
+      if (error) throw error
+      confirmDB()
+    } catch (err) { warnDB("bumpRep", err) }
   }
   return updated
 }
 
 export async function logRun(run: AgentRun): Promise<void> {
-  if (!useBB) return
+  if (!useDB) return
   try {
-    const c = await bb()
-    unwrap(await c.from("agent_runs").insert(
-      { agent_id: run.agent_id, task: run.task, outcome: run.outcome, result: run.result }), "logRun")
-  } catch (err) { warnBB("logRun", err) }
+    const { error } = await sb().from("agent_runs").insert(
+      { agent_id: run.agent_id, task: run.task, outcome: run.outcome, result: run.result })
+    if (error) throw error
+  } catch (err) { warnDB("logRun", err) }
 }
 
 export async function logInstall(packId: string, agentId: string): Promise<void> {
-  if (!useBB) return
+  if (!useDB) return
   try {
-    const c = await bb()
-    unwrap(await c.from("install_events").insert({ pack_id: packId, agent_id: agentId }), "logInstall")
-  } catch (err) { warnBB("logInstall", err) }
+    const { error } = await sb().from("install_events").insert({ pack_id: packId, agent_id: agentId })
+    if (error) throw error
+  } catch (err) { warnDB("logInstall", err) }
 }

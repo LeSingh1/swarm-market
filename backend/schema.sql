@@ -1,4 +1,5 @@
--- Butterbase tables. Create these in the Butterbase console / via MCP.
+-- Supabase tables. Paste this whole file into the Supabase SQL editor and run.
+-- After creating them, either disable RLS on these tables or use the service key.
 
 create table skill_packs (
   id            text primary key,
