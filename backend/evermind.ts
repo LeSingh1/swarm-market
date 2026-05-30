@@ -1,18 +1,21 @@
 // ============================================================
-// EverMind memory interface (Person A).
-// Thin wrapper so we can see exactly where it breaks.
+// EverMind memory interface (Person A). REAL endpoints wired.
 //
-// >>> ONE THING TO SWAP FROM THE 10:30 WORKSHOP <<<
-// The endpoint paths + payload shape in WORKSHOP below are a best guess.
-// When you have the real spec, edit ONLY the WORKSHOP block. Everything
-// else (mirror, fallback, the 5 exported fns) stays as-is.
+// EverMind (api.evermind.ai) is an async long-term MEMORY-EXTRACTION engine,
+// not a key-value store: POST /api/v0/memories ingests a message (202 queued),
+// extraction happens in the background on conversation boundaries, and
+// GET /api/v0/memories?user_id= returns extracted *summaries* — never your
+// exact JSON, and never synchronously. (Verified: a single posted message
+// does not come back within 25s.)
 //
-// Episodic memory = raw run history per agent (namespace = agent_id).
-// Long-term store  = the published skill-pack registry (namespace "market").
+// So the design that actually fits both tools:
+//   - WRITE-THROUGH to real EverMind: every agent episode + published pack is
+//     genuinely POSTed to EverMind (202). This is real long-term agent memory.
+//   - The exact, synchronous skill-pack REGISTRY is the in-memory mirror
+//     (and Butterbase in db.ts). Recall reads the mirror so the cold->install
+//     ->success demo is deterministic and exact.
 //
-// Resilience: every write also lands in an in-memory mirror, and every
-// recall falls back to the mirror if EverMind errors or returns nothing.
-// This keeps the live demo deterministic even if EverMind is down.
+// namespace = agent_id (per-agent memory) or "market" (shared registry).
 // ============================================================
 import type { Episode, SkillPack } from "../src/types/contract";
 
@@ -35,62 +38,90 @@ function mirrorRead<T>(ns: string, kind: string): T[] {
   return ([...(mirror.get(mkey(ns, kind)) ?? [])] as T[]);
 }
 
-// ---------- WORKSHOP: the only block to edit once you have the real spec ----------
-async function emWrite(namespace: string, kind: string, data: unknown): Promise<void> {
-  // TODO(workshop): exact write endpoint + payload shape.
-  await em("/v1/memory/write", { namespace, kind, data });
-}
-async function emRecall(namespace: string, kind: string, query: string): Promise<unknown[]> {
-  // TODO(workshop): exact recall endpoint + how results come back.
-  const r = await em("/v1/memory/recall", { namespace, kind, query });
-  return (r.items ?? r.results ?? r.memories ?? []) as unknown[];
-}
-// ---------------------------------------------------------------------------------
+// ---------- real EverMind wire (api.evermind.ai, /api/v0/memories) ----------
+const isoTz = () => new Date().toISOString().replace(/\.\d+Z$/, "+00:00");
 
-async function em(path: string, body: unknown): Promise<any> {
+// Ingest one memory under `namespace` (the EverMind user_id). 202 = queued.
+async function emWrite(namespace: string, kind: string, data: unknown): Promise<void> {
+  await em("POST", "/api/v0/memories", {
+    message_id: `${kind}_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
+    create_time: isoTz(),
+    sender: namespace,
+    sender_name: namespace,
+    role: "assistant",
+    content: `[swarm:${kind}] ${JSON.stringify(data)}`,
+  });
+}
+
+// Best-effort: fetch extracted memories for a namespace. Returns summaries, not
+// exact objects, and only after async extraction — so it backstops the mirror,
+// it does not replace it.
+async function emRecall(namespace: string, _kind: string): Promise<unknown[]> {
+  const r = await em(
+    "GET",
+    `/api/v0/memories?user_id=${encodeURIComponent(namespace)}&memory_type=episodic_memory&limit=50`,
+  );
+  return (r?.result?.memories ?? []) as unknown[];
+}
+
+// Count of extracted memories EverMind holds for a namespace (proof of backing).
+export async function everMindMemoryCount(namespace: string): Promise<number> {
+  try {
+    return (await emRecall(namespace, "episode")).length;
+  } catch {
+    return -1;
+  }
+}
+// ----------------------------------------------------------------------------
+
+async function em(method: "GET" | "POST", path: string, body?: unknown): Promise<any> {
   if (!EVERMIND_API_KEY) throw new Error("EVERMIND_API_KEY not set");
   const res = await fetch(`${EVERMIND_BASE}${path}`, {
-    method: "POST",
+    method,
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${EVERMIND_API_KEY}` },
-    body: JSON.stringify(body),
+    body: body ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) throw new Error(`EverMind ${path} ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw new Error(`EverMind ${method} ${path} ${res.status}: ${await res.text()}`);
   return res.json();
 }
 
-let warnedOnce = false;
-function note(kind: string, err: unknown) {
-  if (!warnedOnce) {
-    console.warn(`[evermind] using in-memory mirror (${kind}): ${(err as Error).message}`);
-    warnedOnce = true;
-  }
-}
+let warnedWrite = false;
+let confirmedWrite = false;
 
 async function write(ns: string, kind: string, data: unknown): Promise<void> {
-  mirrorWrite(ns, kind, data); // always mirror first so recall can never miss
+  mirrorWrite(ns, kind, data); // exact, synchronous registry copy
   try {
-    await emWrite(ns, kind, data);
+    await emWrite(ns, kind, data); // genuine write-through to EverMind (202 queued)
+    if (!confirmedWrite) {
+      console.log(`[evermind] write-through live: ${kind} -> EverMind (api.evermind.ai)`);
+      confirmedWrite = true;
+    }
   } catch (err) {
-    note(`write ${kind}`, err);
+    if (!warnedWrite) {
+      console.warn(`[evermind] write-through unavailable, mirror only: ${(err as Error).message}`);
+      warnedWrite = true;
+    }
   }
 }
 
-async function recall<T>(ns: string, kind: string, query: string): Promise<T[]> {
+// Mirror is authoritative for exact objects (deterministic demo). EverMind's
+// extracted summaries only backstop the rare case where the mirror is empty.
+async function recall<T>(ns: string, kind: string): Promise<T[]> {
+  const local = mirrorRead<T>(ns, kind);
+  if (local.length) return local;
   try {
-    const items = await emRecall(ns, kind, query);
-    if (items.length) return items as T[];
-  } catch (err) {
-    note(`recall ${kind}`, err);
+    return (await emRecall(ns, kind)) as T[];
+  } catch {
+    return [];
   }
-  return mirrorRead<T>(ns, kind);
 }
 
 // --- episodic ---
 export async function storeEpisode(ep: Episode): Promise<void> {
   await write(ep.agent_id, "episode", ep);
 }
-export async function recallEpisodes(agentId: string, query: string): Promise<Episode[]> {
-  return recall<Episode>(agentId, "episode", query);
+export async function recallEpisodes(agentId: string, _query: string): Promise<Episode[]> {
+  return recall<Episode>(agentId, "episode");
 }
 
 // --- long-term registry (skill-packs) ---
@@ -98,7 +129,7 @@ export async function storePack(pack: SkillPack): Promise<void> {
   await write(MARKET_NS, "skillpack", pack);
 }
 export async function recallInstalledPacks(agentId: string): Promise<SkillPack[]> {
-  return recall<SkillPack>(agentId, "skillpack", "*");
+  return recall<SkillPack>(agentId, "skillpack");
 }
 
 // install = copy a pack from the shared market namespace into the agent's own memory
