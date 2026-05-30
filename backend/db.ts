@@ -1,8 +1,9 @@
 // ============================================================
 // Pack registry + run/install logs.
-// Dual-path: real Butterbase when BUTTERBASE_APP_ID is set, otherwise an
-// in-memory seeded Map so the demo always runs. Same signatures either way.
-// Tables (see schema.sql): skill_packs, agent_runs, install_events.
+// Dual-path: real Butterbase when BUTTERBASE_APP_ID is set, plus an in-memory
+// Map kept as a live mirror so a Butterbase hiccup/RLS block can never break
+// the demo. Same signatures either way. Tables (schema.sql): skill_packs,
+// agent_runs, install_events.
 // ============================================================
 import type { AgentRun, SkillPack } from "../src/types/contract"
 
@@ -19,10 +20,24 @@ async function bb(): Promise<any> {
   _bb = createClient({ appId: BB_APP_ID!, apiUrl: BB_API_URL, anonKey: BB_ANON_KEY })
   return _bb
 }
-// Butterbase returns { data, error }; surface errors loudly so misconfig is obvious.
 function unwrap<T>(res: { data: T; error: any }, where: string): T {
-  if (res?.error) throw new Error(`Butterbase ${where}: ${res.error.message ?? res.error}`)
+  if (res?.error) throw new Error(`${where}: ${res.error.message ?? res.error}`)
   return res.data
+}
+
+let warnedBB = false
+let confirmedBB = false
+function warnBB(where: string, err: unknown) {
+  if (!warnedBB) {
+    console.warn(`[butterbase] falling back to in-memory mirror (${where}): ${(err as Error).message}`)
+    warnedBB = true
+  }
+}
+function confirmBB() {
+  if (!confirmedBB) {
+    console.log(`[butterbase] live: reads/writes hitting ${BB_API_URL} (app ${BB_APP_ID})`)
+    confirmedBB = true
+  }
 }
 
 // row <-> SkillPack (schema flattens provenance into two columns)
@@ -38,7 +53,7 @@ const fromRow = (r: any): SkillPack => ({
   created_at: r.created_at,
 })
 
-// ---------------- in-memory fallback (seeded so the market isn't empty) ----------------
+// ---------------- in-memory mirror (seeded so the market isn't empty) ----------------
 const seed: SkillPack[] = [
   { id: "sp_demo1", name: "Fintech objection: lead with compliance",
     lesson: "When a fintech prospect objects on price, pivot to compliance risk reduction first, then TCO.",
@@ -53,34 +68,33 @@ const packs = new Map<string, SkillPack>(seed.map(p => [p.id, p]))
 
 // Seed Butterbase once if the table is empty, so the UI still has data to show.
 let seeded = false
-async function seedBBOnce() {
+async function seedBBOnce(c: any) {
   if (seeded) return
   seeded = true
-  const c = await bb()
   const existing = unwrap<any[]>(await c.from("skill_packs").select("id").limit(1), "seed check")
-  if (!existing?.length) {
-    for (const p of seed) await c.from("skill_packs").insert(toRow(p))
-  }
+  if (!existing?.length) for (const p of seed) await c.from("skill_packs").insert(toRow(p))
 }
 
 // ---------------- public API (identical signatures both paths) ----------------
 export async function upsertPack(p: SkillPack): Promise<void> {
-  if (useBB) {
+  packs.set(p.id, p) // mirror always
+  if (!useBB) return
+  try {
     const c = await bb()
     const found = unwrap<any[]>(await c.from("skill_packs").select("id").eq("id", p.id), "upsert lookup")
     if (found?.length) unwrap(await c.from("skill_packs").update(toRow(p)).eq("id", p.id), "update")
     else unwrap(await c.from("skill_packs").insert(toRow(p)), "insert")
-    return
-  }
-  packs.set(p.id, p)
+    confirmBB()
+  } catch (err) { warnBB("upsertPack", err) }
 }
 
 export async function getPack(id: string): Promise<SkillPack> {
   if (useBB) {
-    const c = await bb()
-    const rows = unwrap<any[]>(await c.from("skill_packs").select("*").eq("id", id), "getPack")
-    if (!rows?.length) throw new Error(`pack ${id} not found`)
-    return fromRow(rows[0])
+    try {
+      const c = await bb()
+      const rows = unwrap<any[]>(await c.from("skill_packs").select("*").eq("id", id), "getPack")
+      if (rows?.length) { confirmBB(); return fromRow(rows[0]) }
+    } catch (err) { warnBB("getPack", err) }
   }
   const p = packs.get(id)
   if (!p) throw new Error(`pack ${id} not found`)
@@ -89,10 +103,13 @@ export async function getPack(id: string): Promise<SkillPack> {
 
 export async function listPacks(): Promise<SkillPack[]> {
   if (useBB) {
-    await seedBBOnce()
-    const c = await bb()
-    const rows = unwrap<any[]>(await c.from("skill_packs").select("*"), "listPacks")
-    return (rows ?? []).map(fromRow)
+    try {
+      const c = await bb()
+      await seedBBOnce(c)
+      const rows = unwrap<any[]>(await c.from("skill_packs").select("*"), "listPacks")
+      confirmBB()
+      return (rows ?? []).map(fromRow)
+    } catch (err) { warnBB("listPacks", err) }
   }
   return [...packs.values()]
 }
@@ -100,26 +117,30 @@ export async function listPacks(): Promise<SkillPack[]> {
 export async function bumpRep(id: string, delta: number): Promise<SkillPack> {
   const current = await getPack(id)
   const updated: SkillPack = { ...current, rep_score: current.rep_score + delta }
+  packs.set(id, updated) // mirror always
   if (useBB) {
-    const c = await bb()
-    unwrap(await c.from("skill_packs").update({ rep_score: updated.rep_score }).eq("id", id), "bumpRep")
-    return updated
+    try {
+      const c = await bb()
+      unwrap(await c.from("skill_packs").update({ rep_score: updated.rep_score }).eq("id", id), "bumpRep")
+      confirmBB()
+    } catch (err) { warnBB("bumpRep", err) }
   }
-  packs.set(id, updated)
   return updated
 }
 
 export async function logRun(run: AgentRun): Promise<void> {
-  if (useBB) {
+  if (!useBB) return
+  try {
     const c = await bb()
     unwrap(await c.from("agent_runs").insert(
       { agent_id: run.agent_id, task: run.task, outcome: run.outcome, result: run.result }), "logRun")
-  }
+  } catch (err) { warnBB("logRun", err) }
 }
 
 export async function logInstall(packId: string, agentId: string): Promise<void> {
-  if (useBB) {
+  if (!useBB) return
+  try {
     const c = await bb()
     unwrap(await c.from("install_events").insert({ pack_id: packId, agent_id: agentId }), "logInstall")
-  }
+  } catch (err) { warnBB("logInstall", err) }
 }

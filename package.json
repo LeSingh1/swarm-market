@@ -15,7 +15,8 @@
     "server": "tsx backend/server.ts",
     "smoke": "tsx backend/smoke.ts",
     "swarm": "tsx backend/swarm-demo.ts",
-    "test:evermind": "tsx backend/test-evermind.ts"
+    "test:evermind": "tsx backend/test-evermind.ts",
+    "test:butterbase": "tsx backend/test-butterbase.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",
