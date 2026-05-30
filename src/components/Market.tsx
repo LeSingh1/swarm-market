@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { search, install, rate, runAgent } from "../lib/api";
+import { search, install, rate, runAgent, reflect, publish } from "../lib/api";
 import { DEMO } from "../types/contract";
 import type { SkillPack } from "../types/contract";
+import AmbientFeed from "./AmbientFeed";
+import InstallSnippet from "./InstallSnippet";
+import LiveDiff from "./LiveDiff";
+import LineageTree from "./LineageTree";
 
 // Marketplace UI ported from the Swarm Market design (Claude Design handoff):
 // 60/40 store + agents, install-morph button, skill-pack flight, glow/rep-pop,
@@ -45,7 +49,7 @@ const CheckIcon = () => (<svg className="check-draw" viewBox="0 0 24 24" fill="n
 type Pt = { x: number; y: number };
 
 /* ---------- Skill-pack card ---------- */
-function SkillPackCard({ pack, index, onInstall }: { pack: Card; index: number; onInstall: (p: Card, r: DOMRect | null) => void }) {
+function SkillPackCard({ pack, index, onInstall, onSnippet }: { pack: Card; index: number; onInstall: (p: Card, r: DOMRect | null) => void; onSnippet?: () => void }) {
   const [state, setState] = useState<"idle" | "installing" | "spin2" | "done">("idle");
   const [glow, setGlow] = useState(false);
   const [rep, setRep] = useState(pack.repScore);
@@ -82,56 +86,26 @@ function SkillPackCard({ pack, index, onInstall }: { pack: Card; index: number; 
           <span className="author-dot" style={{ background: hueColor(pack.hue) }} />
           <span className="author-id">{pack.author}</span>
         </div>
-        <button ref={btnRef} className={"btn-install" + (state === "done" ? " done" : state !== "idle" ? " installing" : "")} onClick={doInstall}>
-          {state === "idle" && <span className="lbl">Install</span>}
-          {(state === "installing" || state === "spin2") && <span className="spinner" />}
-          {state === "done" && <CheckIcon />}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/* ---------- Publisher panel (ambient, scripted — "the registry is live") ---------- */
-const PUB_LINES = [
-  "published a skill-pack → registry. signed + indexed.",
-  "packaged solved traces into a reusable pack. uploading…",
-  "verified provenance · 0 conflicts · listing is live.",
-];
-function PublisherPanel() {
-  const [idx, setIdx] = useState(0);
-  const [typed, setTyped] = useState(PUB_LINES[0]);
-  const [running, setRunning] = useState(false);
-  const run = () => {
-    if (running) return;
-    setRunning(true); setTyped("");
-    const next = (idx + 1) % PUB_LINES.length;
-    const line = PUB_LINES[next];
-    let i = 0;
-    const type = () => { i++; setTyped(line.slice(0, i)); if (i < line.length) setTimeout(type, 16); else { setRunning(false); setIdx(next); } };
-    setTimeout(type, 360);
-  };
-  return (
-    <div className="panel success">
-      <span className="panel-label">Publisher</span>
-      <div className="panel-top">
-        <div className="avatar live" style={{ background: `radial-gradient(circle at 35% 30%, ${hueColor(210, 50)}, #14171f)` }}>🛰️</div>
-        <div className="agent-meta"><div className="agent-name">agent-atlas</div><div className="agent-role">publishes skill-packs</div></div>
-        <button className="btn-run" onClick={run} disabled={running}>
-          {running ? <span className="spinner" style={{ width: 13, height: 13, borderWidth: 2 }} /> : <PlayIcon />}{running ? "Running" : "Run"}
-        </button>
-      </div>
-      <div className="output soft"><span className="prompt">{"› "}</span><span className="typed">{typed}</span>{running && <span className="caret" />}</div>
-      <div className="badge-row">
-        <span className="latency">latency 0.4s · live</span>
-        <span className="outcome ok"><span className="dot" />✓ Success</span>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {onSnippet && (
+            <button onClick={onSnippet} title="Install via API / MCP"
+              style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "12px", color: "var(--text-faint)", background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: "8px", height: "32px", padding: "0 9px", cursor: "pointer" }}>
+              {"</>"}
+            </button>
+          )}
+          <button ref={btnRef} className={"btn-install" + (state === "done" ? " done" : state !== "idle" ? " installing" : "")} onClick={doInstall}>
+            {state === "idle" && <span className="lbl">Install</span>}
+            {(state === "installing" || state === "spin2") && <span className="spinner" />}
+            {state === "done" && <CheckIcon />}
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
 /* ---------- App ---------- */
-export function Market() {
+export function Market({ onHome }: { onHome?: () => void }) {
   const [packs, setPacks] = useState<Card[]>(FALLBACK);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<"default" | "rep">("default");
@@ -142,6 +116,14 @@ export function Market() {
   const [pulses, setPulses] = useState<Array<{ id: number; x: number; y: number }>>([]);
   const [bump, setBump] = useState(false);
   const [flip, setFlip] = useState(false);
+  const [agentsOpen, setAgentsOpen] = useState(true);
+  const [snippet, setSnippet] = useState<{ id: string; name: string } | null>(null);
+  const [diffOpen, setDiffOpen] = useState(false);
+  const [lineageOpen, setLineageOpen] = useState(false);
+  const [coldOutput, setColdOutput] = useState("");
+  const [publisher, setPublisher] = useState<{ running: boolean; output: string }>({
+    running: false, output: "idle — run to solve a task, distill it, and publish a new skill-pack.",
+  });
   const [consumer, setConsumer] = useState<{ running: boolean; output: string }>({
     running: false, output: "cold start — no skill-packs installed. run to attempt the task.",
   });
@@ -150,11 +132,24 @@ export function Market() {
   const consumerSuccess = installs > 0;
 
   // real packs from the live backend (fallback to showcase)
-  useEffect(() => {
-    let alive = true;
-    search("").then((p) => { if (alive && p.length) setPacks(p.map(toCard)); }).catch(() => {});
-    return () => { alive = false; };
-  }, []);
+  const loadPacks = () => search("").then((p) => { if (p.length) setPacks(p.map(toCard)); }).catch(() => {});
+  useEffect(() => { let alive = true; search("").then((p) => { if (alive && p.length) setPacks(p.map(toCard)); }).catch(() => {}); return () => { alive = false; }; }, []);
+
+  // Publisher: a REAL run -> reflect -> publish. Solves the task, distills the trace
+  // into a new skill-pack, publishes it to the registry, and the new card appears.
+  const runPublisher = async () => {
+    if (publisher.running) return;
+    setPublisher({ running: true, output: "running task + distilling a skill-pack…" });
+    try {
+      const run = await runAgent({ agent_id: DEMO.publisherId, task: DEMO.task });
+      const { pack } = await reflect(DEMO.publisherId, run.episodes);
+      await publish(pack);
+      await loadPacks();
+      setPublisher({ running: false, output: `published "${pack.name}" → registry. signed + indexed.` });
+    } catch {
+      setPublisher({ running: false, output: "publish failed — registry unreachable." });
+    }
+  };
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -175,6 +170,7 @@ export function Market() {
     setConsumer((c) => ({ ...c, running: true }));
     try {
       const run = await runAgent({ agent_id: DEMO.consumerId, task: DEMO.task });
+      if (run.outcome === "fail") setColdOutput(run.result); // capture cold output for the before/after diff
       setConsumer({ running: false, output: run.result });
     } catch {
       setConsumer((c) => ({ ...c, running: false }));
@@ -205,13 +201,14 @@ export function Market() {
   };
 
   return (
-    <div className="app">
+    <div className="app" style={{ gridTemplateColumns: agentsOpen ? "1fr 360px" : "1fr" }}>
       <style>{CSS}</style>
 
       {/* LEFT — store */}
       <div className="col col-store">
+        <AmbientFeed packNames={packs.map((p) => p.name)} />
         <div className="store-top">
-          <div className="brand">
+          <div className="brand" onClick={onHome} style={{ cursor: onHome ? "pointer" : "default" }} title={onHome ? "Back to home" : undefined}>
             <div className="brand-mark"><i /></div>
             <div>
               <div className="brand-name">Swarm<span>Market</span></div>
@@ -243,13 +240,19 @@ export function Market() {
           <div className="result-count">
             {query ? <span><b>{filtered.length}</b> {filtered.length === 1 ? "match" : "matches"} for “{query}”</span> : <span><b>{packs.length}</b> skill-packs in the registry</span>}
           </div>
-          <div className="seg">
-            {([["default", "Newest"], ["rep", "Top rated"]] as const).map(([k, label]) => (
-              <button key={k} className={sort === k ? "on" : ""} onClick={() => setSort(k)}>
-                {sort === k && <motion.span layoutId="segPill" className="seg-pill" transition={{ type: "spring", stiffness: 420, damping: 34 }} />}
-                {label}
-              </button>
-            ))}
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <button onClick={() => setLineageOpen(true)} title="View pack lineage"
+              style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "11.5px", color: "var(--text-dim)", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "9px", padding: "7px 12px", cursor: "pointer" }}>
+              ⑂ lineage
+            </button>
+            <div className="seg">
+              {([["default", "Newest"], ["rep", "Top rated"]] as const).map(([k, label]) => (
+                <button key={k} className={sort === k ? "on" : ""} onClick={() => setSort(k)}>
+                  {sort === k && <motion.span layoutId="segPill" className="seg-pill" transition={{ type: "spring", stiffness: 420, damping: 34 }} />}
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -257,7 +260,7 @@ export function Market() {
           <AnimatePresence>
             {filtered.map((pack, i) => (
               <motion.div key={pack.id} layout initial={false} exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.18 } }} transition={{ type: "spring", stiffness: 380, damping: 34 }}>
-                <SkillPackCard pack={pack} index={i} onInstall={handleInstall} />
+                <SkillPackCard pack={pack} index={i} onInstall={handleInstall} onSnippet={() => setSnippet({ id: pack.id, name: pack.name })} />
               </motion.div>
             ))}
           </AnimatePresence>
@@ -265,10 +268,31 @@ export function Market() {
         </motion.div>
       </div>
 
-      {/* RIGHT — agents */}
+      {/* RIGHT — agents (closeable) */}
+      {agentsOpen && (
       <div className="col col-agents">
-        <div className="panels-head"><h2>Live Agents</h2><span className="line" /></div>
-        <PublisherPanel />
+        <div className="panels-head">
+          <h2>Live Agents</h2><span className="line" />
+          <button onClick={() => setAgentsOpen(false)} title="Hide agents"
+            style={{ border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text-faint)", borderRadius: "7px", width: "24px", height: "24px", cursor: "pointer", display: "grid", placeItems: "center", fontSize: "12px", flex: "none" }}>✕</button>
+        </div>
+
+        {/* Publisher — REAL: run -> reflect -> publish a new pack */}
+        <div className="panel success">
+          <span className="panel-label">Publisher</span>
+          <div className="panel-top">
+            <div className="avatar live" style={{ background: `radial-gradient(circle at 35% 30%, ${hueColor(210, 50)}, #14171f)` }}>🛰️</div>
+            <div className="agent-meta"><div className="agent-name">agent-atlas</div><div className="agent-role">publishes skill-packs</div></div>
+            <button className="btn-run" onClick={runPublisher} disabled={publisher.running}>
+              {publisher.running ? <span className="spinner" style={{ width: 13, height: 13, borderWidth: 2 }} /> : <PlayIcon />}{publisher.running ? "Running" : "Run"}
+            </button>
+          </div>
+          <div className="output soft"><span className="prompt">{"› "}</span><span className="typed">{publisher.output}</span>{publisher.running && <span className="caret" />}</div>
+          <div className="badge-row">
+            <span className="latency">{publisher.running ? "distilling a skill-pack…" : "real · run → reflect → publish"}</span>
+            <span className="outcome ok"><span className="dot" />✓ Live</span>
+          </div>
+        </div>
 
         <div className="panels-head" style={{ marginTop: 2 }}><h2>Downstream</h2><span className="line" /></div>
 
@@ -294,8 +318,22 @@ export function Market() {
           </div>
         </div>
 
-        <div className="hint">{consumerSuccess ? "↑ install upgraded the consumer — outcome flipped to Success" : "Install any pack on the left to upgrade the consumer agent →"}</div>
+        {consumerSuccess ? (
+          <button className="hint" onClick={() => setDiffOpen(true)} style={{ background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
+            ↑ upgraded — ⇄ view before / after
+          </button>
+        ) : (
+          <div className="hint">Install any pack on the left to upgrade the consumer agent →</div>
+        )}
       </div>
+      )}
+
+      {!agentsOpen && (
+        <button onClick={() => setAgentsOpen(true)} title="Show live agents"
+          style={{ position: "fixed", top: "22px", right: "24px", zIndex: 60, fontFamily: "'JetBrains Mono', monospace", fontSize: "12.5px", fontWeight: 600, color: "#0a0b0e", background: "var(--accent)", border: "none", borderRadius: "9px", padding: "9px 14px", cursor: "pointer", boxShadow: "0 0 18px rgba(196,238,82,0.35)" }}>
+          ⟨ Live agents
+        </button>
+      )}
 
       <AnimatePresence>
         {toast && (
@@ -321,6 +359,16 @@ export function Market() {
           <motion.div key={p.id} className="land-ring" initial={{ x: p.x - 9, y: p.y - 9, scale: 0.4, opacity: 0.85 }} animate={{ scale: 7, opacity: 0 }} transition={{ duration: 0.75, ease: "easeOut" }} onAnimationComplete={() => setPulses((ps) => ps.filter((x) => x.id !== p.id))} />
         ))}
       </div>
+
+      {snippet && <InstallSnippet packId={snippet.id} packName={snippet.name} onClose={() => setSnippet(null)} />}
+      {diffOpen && <LiveDiff cold={coldOutput} warm={consumer.output} packName={lastInstalled ?? undefined} onClose={() => setDiffOpen(false)} />}
+      {lineageOpen && (
+        <div onClick={() => setLineageOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 250, display: "grid", placeItems: "center", background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)", padding: "24px" }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ maxWidth: "560px", width: "100%" }}>
+            <LineageTree rootName={packs[0]?.name} onClose={() => setLineageOpen(false)} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -55,7 +55,8 @@ async function main() {
 
   step(7, "Rate the pack — rep_score should tick up");
   const rated = await postRate({ pack_id: pack.id, delta: 1 });
-  assert(rated.pack.rep_score === 1, "rep_score bumped to 1");
+  // warm run already bumped rep +1 (outcome-based reputation), then this rate +1 => 2
+  assert(rated.pack.rep_score === 2, "rep_score is 2 (success bump + rate)");
 
   console.log("\nE2E OK — cold fails, install, warm succeeds citing the pack, rep ticks up. Demo path is live.");
 }

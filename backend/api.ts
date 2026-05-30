@@ -15,6 +15,17 @@ import * as db from "./db"
 export async function postRun(body: RunRequest) {
   const run = await runAgent(body.agent_id, body.task)
   await db.logRun(run)
+  // Outcome-based reputation: a real install->success bumps the applied pack's rep,
+  // so "ranked by reputation" reflects measured usage, not just manual ratings.
+  // Best-effort: never let a rep failure break the run response.
+  if (run.outcome === "success" && run.applied_pack_id) {
+    try {
+      const bumped = await db.bumpRep(run.applied_pack_id, 1)
+      await storePack(bumped) // keep EverMind shared registry copy in sync
+    } catch (err) {
+      console.warn(`[rep] outcome bump failed for ${run.applied_pack_id}: ${(err as Error).message}`)
+    }
+  }
   return run
 }
 

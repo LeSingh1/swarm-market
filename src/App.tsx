@@ -7,5 +7,5 @@ export default function App() {
 
   if (view === "landing") return <Landing onEnter={() => setView("market")} />;
 
-  return <Market />;
+  return <Market onHome={() => setView("landing")} />;
 }
