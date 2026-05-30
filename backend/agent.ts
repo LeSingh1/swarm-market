@@ -6,7 +6,10 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { AgentRun, Episode, ReflectResponse, SkillPack } from "../src/types/contract";
 import { recallInstalledPacks, storeEpisode } from "./evermind";
 
-const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+// Lazy so importing this module (e.g. from api.ts in unit tests) never needs a
+// key — the client is only built when an agent actually runs.
+let _claude: Anthropic | null = null;
+const claude = () => (_claude ??= new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! }));
 const MODEL = "claude-opus-4-7"; // latest Opus
 
 const id = (p: string) => `${p}_${Math.random().toString(16).slice(2, 6)}`;
@@ -19,7 +22,7 @@ export async function runAgent(agentId: string, task: string): Promise<AgentRun>
     ? `\n\nYou have learned skills. Apply them:\n${packs.map(p => `- ${p.name}: ${p.lesson} (when: ${p.trigger})`).join("\n")}`
     : "";
 
-  const msg = await claude.messages.create({
+  const msg = await claude().messages.create({
     model: MODEL,
     max_tokens: 600,
     system: `You are an autonomous SDR agent. Do the task. Be concrete.${guidance}`,
@@ -50,7 +53,7 @@ export async function runAgent(agentId: string, task: string): Promise<AgentRun>
 // Distill raw episodes into ONE portable skill-pack (the impressive part).
 export async function reflect(agentId: string, episodes: Episode[]): Promise<ReflectResponse> {
   const transcript = episodes.map(e => `- [${e.outcome}] ${e.action}`).join("\n");
-  const msg = await claude.messages.create({
+  const msg = await claude().messages.create({
     model: MODEL,
     max_tokens: 400,
     system:

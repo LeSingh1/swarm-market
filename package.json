@@ -5,13 +5,18 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:backend": "ts-node-dev --project tsconfig.backend.json --respawn backend/server.ts",
+    "dev:backend": "tsx backend/server.ts",
     "dev:all": "concurrently \"npm run dev\" \"npm run dev:backend\"",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "dev:mcp": "ts-node-dev --project tsconfig.backend.json --transpile-only mcp/server.ts",
-    "build:mcp": "tsc --project tsconfig.backend.json --outDir dist/mcp mcp/server.ts"
+    "build:mcp": "tsc --project tsconfig.backend.json --outDir dist/mcp mcp/server.ts",
+    "server": "tsx backend/server.ts",
+    "smoke": "tsx backend/smoke.ts",
+    "swarm": "tsx backend/swarm-demo.ts",
+    "test:evermind": "tsx backend/test-evermind.ts",
+    "test:supabase": "tsx backend/test-supabase.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",
@@ -38,6 +43,7 @@
     "supertest": "^7.0.0",
     "tailwindcss": "^3.4.4",
     "ts-node-dev": "^2.0.0",
+    "tsx": "^4.22.3",
     "typescript": "^5.5.3",
     "vite": "^5.3.1",
     "vitest": "^1.6.0"
