@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "swarm-market": {
+      "command": "npx",
+      "args": ["ts-node-dev", "--project", "tsconfig.backend.json", "--transpile-only", "mcp/server.ts"],
+      "cwd": ".",
+      "description": "Swarm Market — search, install, publish, and rate agent skill packs"
+    }
+  }
+}
