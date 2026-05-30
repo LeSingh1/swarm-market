@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SwarmMarket — Claude over MCP</title>
+<style>
+  :root {
+    --bg: #0b0c10; --panel: #0f1117; --chrome: #15171f; --border: #20242e;
+    --txt: #d6d9e0; --dim: #7e8390; --faint: #585d68;
+    --green: #c4ee52; --green-dim: #9fc23f; --blue: #6fb2ff; --amber: #f5c451; --red: #ff6b6b;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: radial-gradient(120% 80% at 50% -10%, #15171f 0%, var(--bg) 60%); }
+  body { display: grid; place-items: center; font-family: var(--mono); color: var(--txt); }
+  .win {
+    width: min(1120px, 92vw); height: min(680px, 86vh); background: var(--panel);
+    border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
+    box-shadow: 0 40px 120px rgba(0,0,0,0.6), 0 0 0 1px rgba(196,238,82,0.04);
+    display: flex; flex-direction: column;
+  }
+  .bar { display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: var(--chrome); border-bottom: 1px solid var(--border); }
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .r { background: #ff5f57; } .y { background: #febc2e; } .g { background: #28c840; }
+  .title { margin-left: 12px; font-size: 12.5px; color: var(--dim); letter-spacing: 0.02em; }
+  .title b { color: var(--green); font-weight: 600; }
+  .badge { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--dim); }
+  .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); animation: p 1.6s ease-in-out infinite; }
+  @keyframes p { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(.7)} }
+  .scr { flex: 1; overflow: auto; padding: 22px 26px 28px; font-size: 14.5px; line-height: 1.62; scroll-behavior: smooth; }
+  .line { white-space: pre-wrap; word-break: break-word; }
+  .prompt { color: var(--green); }
+  .path { color: var(--blue); }
+  .cmd { color: var(--txt); }
+  .muted { color: var(--dim); }
+  .faint { color: var(--faint); }
+  .ok { color: var(--green); }
+  .warn { color: var(--amber); }
+  .err { color: var(--red); }
+  .rpc { color: var(--blue); }
+  .key { color: var(--green-dim); }
+  .str { color: #e8d7a0; }
+  .box {
+    border: 1px solid var(--border); border-left: 2px solid var(--green); border-radius: 8px;
+    padding: 10px 14px; margin: 6px 0 10px; background: #0c0e14; color: var(--dim); font-size: 13px;
+  }
+  .box .kk { color: var(--green-dim); }
+  .box .vv { color: var(--txt); }
+  .caret { display: inline-block; width: 9px; height: 17px; background: var(--green); margin-left: 2px; vertical-align: -3px; animation: bl 1s step-end infinite; }
+  @keyframes bl { 50% { opacity: 0; } }
+  .spin { color: var(--amber); }
+</style>
+</head>
+<body>
+  <div class="win">
+    <div class="bar">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="title">agent@swarm — <b>claude</b> → mcp · streamable-http</span>
+      <span class="badge"><span class="pulse"></span>live MCP session</span>
+    </div>
+    <div class="scr" id="scr"></div>
+  </div>
+
+<script>
+const MCP_URL = new URLSearchParams(location.search).get("mcp") || "http://localhost:8787/mcp";
+const scr = document.getElementById("scr");
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+function el(cls, html) { const d = document.createElement("div"); d.className = "line " + (cls||""); if (html!=null) d.innerHTML = html; scr.appendChild(d); scr.scrollTop = scr.scrollHeight; return d; }
+function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+async function type(node, text, speed=14) {
+  for (let i=0;i<text.length;i++){ node.textContent += text[i]; scr.scrollTop = scr.scrollHeight; await sleep(speed); }
+}
+async function prompt(cmd) {
+  const d = el("", '<span class="prompt">agent</span><span class="muted">@</span><span class="path">swarm</span><span class="muted">:~$</span> <span class="cmd"></span>');
+  const span = d.querySelector(".cmd");
+  await type(span, cmd, 16);
+  await sleep(260);
+}
+
+// Real MCP call over streamable-http. Parses the SSE `data:` frame.
+let _id = 1;
+async function mcp(method, params) {
+  const res = await fetch(MCP_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Accept": "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: _id++, method, params }),
+  });
+  const raw = await res.text();
+  const dataLine = raw.split("\n").find(l => l.startsWith("data:"));
+  const payload = dataLine ? dataLine.slice(5).trim() : raw;
+  const json = JSON.parse(payload);
+  if (json.error) throw new Error(json.error.message || "mcp error");
+  return json.result;
+}
+// tools/call returns { content: [{type:"text", text:"<json>"}] }; unwrap the text->JSON.
+function unwrap(result) {
+  const t = result?.content?.[0]?.text;
+  try { return JSON.parse(t); } catch { return t; }
+}
+
+async function rpc(label, method, params) {
+  el("rpc", '<span class="faint">→</span> <span class="rpc">' + esc(label) + '</span>');
+  const spin = el("spin", '  <span class="spin">⠋ awaiting server…</span>');
+  const frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"; let fi = 0;
+  const t = setInterval(() => { spin.innerHTML = '  <span class="spin">' + frames[fi=(fi+1)%frames.length] + ' awaiting server…</span>'; }, 80);
+  const result = await mcp(method, params);
+  clearInterval(t); spin.remove();
+  return result;
+}
+
+function packBox(p) {
+  el("", '<div class="box">'
+    + '<div><span class="kk">name</span>     <span class="vv">' + esc(p.name) + '</span></div>'
+    + '<div><span class="kk">lesson</span>   <span class="vv">' + esc(p.lesson) + '</span></div>'
+    + '<div><span class="kk">trigger</span>  <span class="vv">' + esc(p.trigger) + '</span></div>'
+    + '<div><span class="kk">by</span>       <span class="vv">' + esc(p.provenance.created_by) + '</span>  '
+    +     '<span class="kk">domain</span> <span class="vv">' + esc(p.domain) + '</span></div>'
+    + '</div>');
+}
+
+async function run() {
+  const AGENT = "agent_claude";
+  const TASK = 'Handle an enterprise SaaS prospect who says "your competitor is cheaper" — without discounting.';
+
+  await sleep(500);
+  // 1) Connect (one-time registration shown for context)
+  await prompt('claude mcp add --transport http swarm-market ' + MCP_URL);
+  await sleep(180);
+  el("ok", '<span class="ok">✓</span> <span class="muted">registered MCP server </span><span class="ok">swarm-market</span><span class="muted"> — 6 tools available</span>');
+  await sleep(500);
+
+  // 2) Initialize the live session
+  const init = await rpc('initialize', 'initialize', { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "claude", version: "1.0" } });
+  el("", '  <span class="muted">server </span><span class="ok">' + esc(init.serverInfo.name) + '</span><span class="muted"> v' + esc(init.serverInfo.version) + ' · protocol ' + esc(init.protocolVersion) + '</span>');
+  await sleep(650);
+
+  // 3) run_agent — cold attempt
+  await prompt('# the agent attempts the task with no installed skills');
+  const run = unwrap(await rpc('tools/call run_agent ' + JSON.stringify({ agent_id: AGENT, task: "enterprise price objection…" }), 'tools/call', { name: "run_agent", arguments: { agent_id: AGENT, task: TASK } }));
+  el("", '  <span class="muted">outcome </span><span class="' + (run.outcome==="success"?"ok":"err") + '">' + esc(run.outcome.toUpperCase()) + '</span><span class="muted"> — cold agent, generic placeholder draft</span>');
+  await sleep(700);
+
+  // 4) reflect_episodes — Claude distills the lesson
+  await prompt('# Claude distills the run into ONE portable skill-pack');
+  const reflected = unwrap(await rpc('tools/call reflect_episodes ' + JSON.stringify({ agent_id: AGENT, episodes: "[…]" }), 'tools/call', { name: "reflect_episodes", arguments: { agent_id: AGENT, episodes: run.episodes } }));
+  el("ok", '<span class="ok">✓</span> <span class="muted">distilled by claude:</span>');
+  packBox(reflected.pack);
+  await sleep(800);
+
+  // 5) publish_pack — upload to the shared market
+  await prompt('# publish the pack so any agent can install it');
+  const published = unwrap(await rpc('tools/call publish_pack ' + JSON.stringify({ pack: reflected.pack.name }), 'tools/call', { name: "publish_pack", arguments: { pack: reflected.pack } }));
+  el("ok", '<span class="ok">✓ published</span> <span class="muted">"</span><span class="ok">' + esc(published.pack.name) + '</span><span class="muted">" → shared registry · signed + indexed</span>');
+  await sleep(700);
+
+  // 6) search_market — prove it's now discoverable
+  await prompt('# any other agent can now discover it');
+  const found = unwrap(await rpc('tools/call search_market ' + JSON.stringify({ q: "personalize" }), 'tools/call', { name: "search_market", arguments: { q: "personalize" } }));
+  const hit = found.packs.find(p => p.name === published.pack.name) || found.packs[0];
+  el("ok", '<span class="ok">✓</span> <span class="muted">found in registry: </span><span class="ok">' + esc(hit.name) + '</span><span class="muted"> · by ' + esc(hit.provenance.created_by) + '</span>');
+  await sleep(500);
+  el("", '');
+  el("ok", '<span class="ok">— a Claude agent published a skill-pack over MCP. no human in the loop.</span>');
+  el("", '<span class="prompt">agent</span><span class="muted">@</span><span class="path">swarm</span><span class="muted">:~$</span> <span class="caret"></span>');
+  document.body.dataset.done = "1";
+}
+
+run().catch(e => { el("err", '<span class="err">✗ ' + esc(e.message) + '</span>'); document.body.dataset.done = "err"; });
+</script>
+</body>
+</html>

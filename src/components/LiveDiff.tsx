@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 // Live Diff Ringside — before/after side-by-side of an agent's output.
@@ -12,31 +12,40 @@ type LiveDiffProps = {
   onClose: () => void;
 };
 
-const SAMPLE_COLD = `> task: route the delivery fleet around the closed bridge
+const SAMPLE_COLD = `> task: cold outreach email to a fintech prospect who objects on price
 
-thinking… picking the shortest line on the map.
-plan: send all 6 trucks straight down Mission Blvd.
+thinking… they said we're expensive, so lead with a discount.
 
-✗ Mission Blvd is the CLOSED bridge approach.
-✗ no fallback path computed.
-✗ ETA: failed — fleet stuck at barrier (0/6 delivered)
+Hi [First Name],
 
-result: FAILED
-confidence: 0.91 (overconfident, wrong)`;
+I know [Company] said our pricing is high. We can do 20% off
+if you sign this quarter — just let me know!
 
-const SAMPLE_WARM = `> task: route the delivery fleet around the closed bridge
-> using: NavigatorPro skill-pack
+✗ leads with a discount — trains the buyer to expect concessions
+✗ unfilled placeholders left in: [First Name], [Company]
+✗ no compliance angle, no ROI, no quantified value
 
-read closures layer → Mission Blvd bridge = CLOSED.
-build detour graph → Warm Springs ▸ Auto Mall Pkwy ▸ Kato.
-validate each leg against live closures ✓
+result: FAILED — generic, discount-led, never sent
+confidence: 0.92 (overconfident, wrong)`;
 
-plan: 6 trucks split across 2 detours (load-balanced).
-✓ no truck routed through the closed approach
-✓ fallback path cached for re-routes
-✓ ETA: +7 min vs ideal, 6/6 delivered
+const SAMPLE_WARM = `> task: cold outreach email to a fintech prospect who objects on price
+> using: Fintech-objection skill-pack
 
-result: SUCCESS
+reframe the price objection → compliance + ROI, not a discount.
+
+Subject: cutting your AML review cycle, not your budget
+
+Hi Sarah,
+
+You flagged price — fair. Most fintechs we work with weren't
+overpaying; they were bleeding on manual AML review and failed
+payment recovery (60-70% vs the 85%+ benchmark).
+
+✓ leads with compliance + ROI, never a discount
+✓ quantified pain: AML fines, recovery rate, ops hours
+✓ personalized — zero unfilled placeholders
+
+result: SUCCESS — compliance-led, quantified, ready to send
 confidence: 0.88 (calibrated)`;
 
 const C = {
@@ -52,11 +61,51 @@ const C = {
   fail: "#8b8f9c",
 } as const;
 
+type LineKind = "fail" | "ok" | "prompt" | "default";
+
+function classifyLine(line: string): LineKind {
+  const t = line.trimStart();
+  if (t.startsWith("✗") || /\bFAILED\b/.test(t)) return "fail";
+  if (t.startsWith("✓") || /\bSUCCESS\b/.test(t)) return "ok";
+  if (t.startsWith(">")) return "prompt";
+  return "default";
+}
+
+function lineSummary(text: string): { fails: number; wins: number } {
+  let fails = 0, wins = 0;
+  for (const line of text.split("\n")) {
+    const k = classifyLine(line);
+    if (k === "fail") fails++;
+    else if (k === "ok") wins++;
+  }
+  return { fails, wins };
+}
+
+function DiffLines({ text }: { text: string }) {
+  const lines = text.split("\n");
+  return (
+    <>
+      {lines.map((line, i) => {
+        const kind = classifyLine(line);
+        return (
+          <span key={i} className={`ld-line ld-line--${kind}`}>
+            {line}
+            {i < lines.length - 1 ? "\n" : ""}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
 export default function LiveDiff(props: LiveDiffProps) {
   const { cold, warm, packName, onClose } = props;
   const coldText = cold && cold.trim().length > 0 ? cold : SAMPLE_COLD;
   const warmText = warm && warm.trim().length > 0 ? warm : SAMPLE_WARM;
   const name = packName && packName.trim().length > 0 ? packName : "NavigatorPro";
+
+  const coldSummary = useMemo(() => lineSummary(coldText), [coldText]);
+  const warmSummary = useMemo(() => lineSummary(warmText), [warmText]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -110,9 +159,12 @@ export default function LiveDiff(props: LiveDiffProps) {
               <div className="ld-colHead ld-colHead--cold">
                 <span className="ld-mark ld-mark--fail">✗</span>
                 <span className="ld-colLabel">Cold (no skill-pack)</span>
+                {coldSummary.fails > 0 && (
+                  <span className="ld-chip-sum ld-chip-sum--fail">✗ {coldSummary.fails} issue{coldSummary.fails !== 1 ? "s" : ""}</span>
+                )}
               </div>
               <pre className="ld-panel ld-panel--cold">
-                <code>{coldText}</code>
+                <code><DiffLines text={coldText} /></code>
               </pre>
             </section>
 
@@ -128,9 +180,12 @@ export default function LiveDiff(props: LiveDiffProps) {
                 <span className="ld-colLabel">
                   After install: <span className="ld-pack">{name}</span>
                 </span>
+                {warmSummary.wins > 0 && (
+                  <span className="ld-chip-sum ld-chip-sum--ok">✓ {warmSummary.wins} win{warmSummary.wins !== 1 ? "s" : ""}</span>
+                )}
               </div>
               <pre className="ld-panel ld-panel--warm">
-                <code>{warmText}</code>
+                <code><DiffLines text={warmText} /></code>
               </pre>
             </section>
           </div>
@@ -322,6 +377,25 @@ const LD_CSS = `
 }
 .ld-panel::-webkit-scrollbar-thumb:hover { background: ${C.faint}; }
 .ld-panel::-webkit-scrollbar-track { background: transparent; }
+
+.ld-line { display: block; }
+.ld-line--fail { color: #d97070; background: rgba(200, 70, 70, 0.09); border-radius: 3px; }
+.ld-line--ok { color: ${C.limeBright}; background: rgba(196, 238, 82, 0.08); border-radius: 3px; }
+.ld-line--prompt { color: ${C.faint}; }
+.ld-line--default {}
+
+.ld-chip-sum {
+  margin-left: auto;
+  flex: none;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  padding: 3px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.ld-chip-sum--fail { color: #d97070; background: rgba(200, 70, 70, 0.15); border: 1px solid rgba(200, 70, 70, 0.25); }
+.ld-chip-sum--ok { color: ${C.bg}; background: ${C.lime}; }
 
 @media (max-width: 720px) {
   .ld-arena { grid-template-columns: 1fr; gap: 14px; }

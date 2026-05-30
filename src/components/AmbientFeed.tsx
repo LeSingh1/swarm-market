@@ -100,7 +100,7 @@ function EventItem({ ev }: { ev: FeedEvent }) {
   );
 }
 
-export default function AmbientFeed(props: { packNames?: string[] }) {
+export default function AmbientFeed(props: { packNames?: string[]; reserveRight?: number }) {
   const packs = useMemo(() => {
     const real = (props.packNames ?? []).filter((p) => p && p.trim().length > 0);
     if (real.length === 0) return FALLBACK_PACKS;
@@ -135,13 +135,16 @@ export default function AmbientFeed(props: { packNames?: string[] }) {
   // Duplicate the row for a seamless -50% translate loop.
   const rowKey = events.map((e) => e.id).join("|");
 
+  const reserve = props.reserveRight ?? 0;
+
   return (
-    <div className="af-strip" role="status" aria-label="Live swarm activity feed">
+    <div className="af-strip" role="status" aria-label="Live swarm activity feed"
+      style={reserve > 0 ? { marginRight: reserve } : undefined}>
       <style>{AF_CSS}</style>
 
       <span className="af-badge">
         <span className="af-pulse" />
-        LIVE SWARM
+        live action
       </span>
 
       <div className="af-viewport">
@@ -188,7 +191,7 @@ const AF_CSS = `
   font-size: 9.5px;
   font-weight: 600;
   letter-spacing: 0.12em;
-  text-transform: uppercase;
+  text-transform: lowercase;
   color: #9a9da8;
   padding: 3px 8px;
   background: #171a21;

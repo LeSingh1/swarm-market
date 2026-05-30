@@ -7,19 +7,20 @@ interface InstallSnippetProps {
   onClose: () => void;
 }
 
-type SnippetKey = "mcp" | "http";
+type SnippetKey = "connect" | "agent" | "http";
 
 export default function InstallSnippet({ packId, packName, onClose }: InstallSnippetProps) {
   const [copied, setCopied] = useState<SnippetKey | null>(null);
 
-  const mcpSnippet = JSON.stringify(
-    {
-      tool: "install_pack",
-      arguments: { agent_id: "your-agent", pack_id: packId },
-    },
-    null,
-    2
-  );
+  const connectSnippet = `claude mcp add --transport http swarm-market http://localhost:8787/mcp`;
+
+  const agentSnippet =
+    `// 1. discover\n` +
+    `search_market({ q: "${packName}" })\n\n` +
+    `// 2. install\n` +
+    `install_pack({ agent_id: "your-agent", pack_id: "${packId}" })\n\n` +
+    `// 3. run\n` +
+    `run_agent({ agent_id: "your-agent", task: "use ${packName} to ..." })`;
 
   const httpSnippet =
     `curl -X POST http://localhost:8787/api/market/install \\\n` +
@@ -61,7 +62,7 @@ export default function InstallSnippet({ packId, packName, onClose }: InstallSni
 
           <div className="is-snippet-head">
             <div>
-              <div className="is-snippet-eyebrow">One-Call Install</div>
+              <div className="is-snippet-eyebrow">Agent Install</div>
               <h2 className="is-snippet-title">{packName}</h2>
             </div>
             <button
@@ -75,27 +76,41 @@ export default function InstallSnippet({ packId, packName, onClose }: InstallSni
           </div>
 
           <p className="is-snippet-sub">
-            Copy-paste one of these to install this skill-pack against your own agent.
+            Agents install skill-packs over MCP — no human in the loop.
           </p>
 
-          {/* MCP tool call */}
           <section className="is-snippet-block">
             <div className="is-snippet-label-row">
-              <span className="is-snippet-label">MCP Tool Call</span>
+              <span className="is-snippet-label">Connect (one-time)</span>
               <button
                 type="button"
-                className={`is-snippet-copy${copied === "mcp" ? " is-copied" : ""}`}
-                onClick={() => copy("mcp", mcpSnippet)}
+                className={`is-snippet-copy${copied === "connect" ? " is-copied" : ""}`}
+                onClick={() => copy("connect", connectSnippet)}
               >
-                {copied === "mcp" ? "Copied ✓" : "Copy"}
+                {copied === "connect" ? "Copied ✓" : "Copy"}
               </button>
             </div>
             <pre className="is-snippet-code">
-              <code>{mcpSnippet}</code>
+              <code>{connectSnippet}</code>
             </pre>
           </section>
 
-          {/* HTTP / curl */}
+          <section className="is-snippet-block">
+            <div className="is-snippet-label-row">
+              <span className="is-snippet-label">Agent install sequence (MCP)</span>
+              <button
+                type="button"
+                className={`is-snippet-copy${copied === "agent" ? " is-copied" : ""}`}
+                onClick={() => copy("agent", agentSnippet)}
+              >
+                {copied === "agent" ? "Copied ✓" : "Copy"}
+              </button>
+            </div>
+            <pre className="is-snippet-code">
+              <code>{agentSnippet}</code>
+            </pre>
+          </section>
+
           <section className="is-snippet-block">
             <div className="is-snippet-label-row">
               <span className="is-snippet-label">HTTP / cURL</span>

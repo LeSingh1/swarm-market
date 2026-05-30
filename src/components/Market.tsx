@@ -206,7 +206,7 @@ export function Market({ onHome }: { onHome?: () => void }) {
 
       {/* LEFT — store */}
       <div className="col col-store">
-        <AmbientFeed packNames={packs.map((p) => p.name)} />
+        <AmbientFeed packNames={packs.map((p) => p.name)} reserveRight={agentsOpen ? 0 : 140} />
         <div className="store-top">
           <div className="brand" onClick={onHome} style={{ cursor: onHome ? "pointer" : "default" }} title={onHome ? "Back to home" : undefined}>
             <div className="brand-mark"><i /></div>

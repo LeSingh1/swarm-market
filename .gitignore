@@ -6,5 +6,6 @@ dist/
 .DS_Store
 .vite/
 *.tsbuildinfo
+.claude/
 backend-out.txt
 backend-err.txt
