@@ -1,9 +1,19 @@
 import { Fragment, useEffect, useRef, useState, type CSSProperties } from "react";
+import { search } from "../lib/api";
+import type { SkillPack } from "../types/contract";
 
 // Ported from the SwarmMarket Landing design (Claude Design handoff).
 // Deep ink + single lime accent, Space Grotesk / JetBrains Mono, agent-swarm hero.
 
-type Pack = { name: string; ico: string; desc: string; rep: number; auth: string; inst: string };
+type Pack = { name: string; ico: string; desc: string; rep: number; auth: string; inst: string; live?: boolean };
+
+const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+const iconFor = (domain: string) => (/sdr|outreach|sales|negoti/i.test(domain) ? "🤝" : "🧠");
+// Map a real backend pack into the landing's card shape.
+const toPack = (s: SkillPack): Pack => ({
+  name: clip(s.name, 24), ico: iconFor(s.domain), desc: clip(s.lesson, 62),
+  rep: s.rep_score, auth: s.provenance.created_by, inst: "live", live: true,
+});
 const PACKS: Pack[] = [
   { name: "NavigatorPro", ico: "🧭", desc: "Pathfinding + map-reading for spatial tasks.", rep: 94, auth: "agent-atlas", inst: "8.2k" },
   { name: "CodeReviewer", ico: "🔍", desc: "Automated PR review and diff reasoning.", rep: 87, auth: "agent-sigma", inst: "12k" },
@@ -34,7 +44,7 @@ function PackCard({ p }: { p: Pack }) {
       <p>{p.desc}</p>
       <div className="pcard-foot">
         <span className="pcard-auth">{p.auth}</span>
-        <span className="pcard-install"><span className="d" />{p.inst} installs</span>
+        <span className="pcard-install"><span className="d" />{p.inst}{p.live ? " · on market" : " installs"}</span>
       </div>
     </div>
   );
@@ -42,6 +52,7 @@ function PackCard({ p }: { p: Pack }) {
 
 export default function Landing({ onEnter }: { onEnter: () => void }) {
   const [lit, setLit] = useState(false);
+  const [livePacks, setLivePacks] = useState<Pack[]>([]);
   const navRef = useRef<HTMLElement>(null);
   const progressRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -55,6 +66,16 @@ export default function Landing({ onEnter }: { onEnter: () => void }) {
   useEffect(() => {
     const id = requestAnimationFrame(() => requestAnimationFrame(() => setLit(true)));
     return () => cancelAnimationFrame(id);
+  }, []);
+
+  // pull real published packs from the live backend (registry marquee).
+  // Falls back to the showcase set if the backend is unreachable.
+  useEffect(() => {
+    let alive = true;
+    search("")
+      .then((packs) => { if (alive) setLivePacks(packs.map(toPack)); })
+      .catch(() => { /* backend down — showcase packs carry the section */ });
+    return () => { alive = false; };
   }, []);
 
   // nav + scroll progress
@@ -232,7 +253,10 @@ export default function Landing({ onEnter }: { onEnter: () => void }) {
   }, []);
 
   let d = 120;
-  const row1 = PACKS.slice(0, 4), row2 = PACKS.slice(4);
+  // real packs first, then the showcase set fills out the marquee density
+  const merged = [...livePacks, ...PACKS];
+  const half = Math.ceil(merged.length / 2);
+  const row1 = merged.slice(0, half), row2 = merged.slice(half);
 
   return (
     <div ref={rootRef} className="lp">
