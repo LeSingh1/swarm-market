@@ -7,9 +7,5 @@ export default function App() {
 
   if (view === "landing") return <Landing onEnter={() => setView("market")} />;
 
-  return (
-    <div className="min-h-screen bg-[#0f1117] text-white">
-      <Market />
-    </div>
-  );
+  return <Market />;
 }
