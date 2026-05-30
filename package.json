@@ -1,0 +1,29 @@
+{
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "server": "tsx backend/server.ts",
+    "smoke": "tsx backend/smoke.ts",
+    "swarm": "tsx backend/swarm-demo.ts",
+    "test:evermind": "tsx backend/test-evermind.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "latest",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@vitejs/plugin-react": "latest",
+    "dotenv": "^17.4.2",
+    "react": "latest",
+    "react-dom": "latest",
+    "typescript": "latest",
+    "vite": "latest",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "tsx": "^4.22.3"
+  }
+}
