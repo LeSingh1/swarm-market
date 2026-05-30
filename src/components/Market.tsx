@@ -12,8 +12,17 @@ type Card = { id: string; name: string; icon: string; description: string; repSc
 
 const ICONS = ["🧭", "🔍", "🤝", "👁️", "🧵", "🔧", "✍️", "🛡️", "🧠", "📡"];
 const HUES = [210, 280, 16, 320, 150, 45, 95, 350, 190, 60];
-const iconFor = (domain: string, i: number) =>
-  /sdr|outreach|sales|negoti/i.test(domain) ? "🤝" : ICONS[i % ICONS.length];
+const iconFor = (domain: string, i: number) => {
+  const d = domain.toLowerCase();
+  if (/path|navig|spatial/.test(d)) return "🧭";
+  if (/code|review|diff/.test(d)) return "🔍";
+  if (/vision|image|chart/.test(d)) return "👁️";
+  if (/safety|guard|security/.test(d)) return "🛡️";
+  if (/memory|recall|context/.test(d)) return "🧵";
+  if (/tool|api|forge/.test(d)) return "🔧";
+  if (/sdr|outreach|sales|negoti/.test(d)) return "🤝";
+  return ICONS[i % ICONS.length];
+};
 const toCard = (s: SkillPack, i: number): Card => ({
   id: s.id, name: s.name, icon: iconFor(s.domain, i), description: s.lesson,
   repScore: s.rep_score, author: s.provenance.created_by, hue: HUES[i % HUES.length],
@@ -112,7 +121,7 @@ function PublisherPanel() {
           {running ? <span className="spinner" style={{ width: 13, height: 13, borderWidth: 2 }} /> : <PlayIcon />}{running ? "Running" : "Run"}
         </button>
       </div>
-      <div className="output bright"><span className="prompt">{"› "}</span><span className="typed">{typed}</span>{running && <span className="caret" />}</div>
+      <div className="output soft"><span className="prompt">{"› "}</span><span className="typed">{typed}</span>{running && <span className="caret" />}</div>
       <div className="badge-row">
         <span className="latency">latency 0.4s · live</span>
         <span className="outcome ok"><span className="dot" />✓ Success</span>
@@ -332,11 +341,16 @@ const CSS = `
 .app ::-webkit-scrollbar-thumb { background:#262b38; border-radius:8px; border:2px solid var(--bg); }
 
 .app .brand { display:flex; align-items:center; gap:12px; }
-.app .brand-mark { width:34px; height:34px; border-radius:9px; position:relative; flex:none; background:linear-gradient(150deg,#c8f05a 0%,#9bc62f 100%); box-shadow:0 4px 16px rgba(196,238,82,0.28), inset 0 1px 0 rgba(255,255,255,0.25); overflow:hidden; }
+.app .brand-mark { width:34px; height:34px; border-radius:9px; position:relative; flex:none; background:linear-gradient(150deg,#c8f05a 0%,#9bc62f 100%); box-shadow:0 4px 16px rgba(196,238,82,0.28), inset 0 1px 0 rgba(255,255,255,0.25); overflow:hidden; animation:markPulse 3.2s ease-in-out infinite; }
 .app .brand-mark::before, .app .brand-mark::after, .app .brand-mark i { content:""; position:absolute; width:6px; height:6px; border-radius:50%; background:#0a0b0e; opacity:0.9; }
-.app .brand-mark::before { top:8px; left:14px; } .app .brand-mark::after { bottom:8px; left:8px; }
-.app .brand-mark i { bottom:9px; right:8px; animation:swarm 3.4s ease-in-out infinite; }
-@keyframes swarm { 0%,100% { transform:translate(0,0); } 50% { transform:translate(-3px,-4px); } }
+/* three agents orbiting in distinct paths — a live swarm */
+.app .brand-mark::before { top:8px; left:14px; animation:swarmA 3.2s ease-in-out infinite; }
+.app .brand-mark::after { bottom:8px; left:8px; animation:swarmB 3.2s ease-in-out infinite; }
+.app .brand-mark i { bottom:9px; right:8px; animation:swarmC 3.2s ease-in-out infinite; }
+@keyframes swarmA { 0%,100% { transform:translate(0,0); } 33% { transform:translate(-5px,6px); } 66% { transform:translate(4px,3px); } }
+@keyframes swarmB { 0%,100% { transform:translate(0,0); } 33% { transform:translate(7px,-4px); } 66% { transform:translate(2px,-7px); } }
+@keyframes swarmC { 0%,100% { transform:translate(0,0); } 33% { transform:translate(-4px,-6px); } 66% { transform:translate(-7px,2px); } }
+@keyframes markPulse { 0%,100% { box-shadow:0 4px 16px rgba(196,238,82,0.28), inset 0 1px 0 rgba(255,255,255,0.25); } 50% { box-shadow:0 5px 24px rgba(196,238,82,0.55), inset 0 1px 0 rgba(255,255,255,0.32); } }
 .app .brand-name { font-size:19px; font-weight:800; letter-spacing:-0.02em; } .app .brand-name span { color:var(--blue-bright); }
 .app .brand-sub { font-family:var(--mono); font-size:10.5px; color:var(--text-faint); letter-spacing:0.04em; margin-top:1px; }
 .app .store-top { display:flex; align-items:flex-end; justify-content:space-between; margin-bottom:18px; }
@@ -411,6 +425,8 @@ const CSS = `
 .app .btn-run svg { width:13px; height:13px; }
 .app .output { background:var(--bg-2); border:1px solid var(--border-soft); border-radius:9px; padding:11px 13px; min-height:64px; max-height:230px; overflow-y:auto; white-space:pre-wrap; font-family:var(--mono); font-size:12px; line-height:1.55; color:var(--text-faint); position:relative; transition:color .35s; }
 .app .output.bright { color:var(--green-bright); }
+.app .output.soft { font-family:'Space Grotesk', system-ui, sans-serif; }
+.app .output.soft .typed { color:var(--text-dim); font-weight:400; }
 .app .output .prompt { color:var(--text-faint); } .app .output .typed { color:inherit; } .app .output.bright .typed { color:var(--green-bright); font-weight:600; }
 .app .caret { display:inline-block; width:7px; height:13px; background:var(--blue-bright); margin-left:2px; vertical-align:-2px; animation:blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity:0; } }
